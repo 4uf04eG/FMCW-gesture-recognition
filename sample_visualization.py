@@ -17,7 +17,7 @@ class SampleVisualizer:
     def run(self):
         folder_paths = glob.glob(self.samples_path + "/*")
 
-        allowed_types = ['test2']
+        allowed_types = ['push', 'pull']
         folder_paths = [path for path in folder_paths if any(t in path for t in allowed_types)]
 
         for folder_path in folder_paths:

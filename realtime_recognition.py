@@ -1,4 +1,5 @@
 from AvianRDKWrapper.ifxRadarSDK import *
+from debouncer import Debouncer
 from dbf import DBF
 from common import do_preprocessing, do_postprocessing, configure_device
 from range_doppler import DopplerAlgo, linear_to_dB
@@ -7,22 +8,20 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import LabelEncoder
-import asyncio
 
 
 class PredictionPipeline:
     def __init__(self, debouncer_length=7, num_receivers=3):
         # self.model_path = "/home/ilya/Downloads/trained_model_25ep.pt"
-        self.model_path = "/home/ilya/Downloads/trained_model_finetune_4cl_20ep.pt"
-        self.encoder_path = "/home/ilya/Downloads/encoder_4(1).npy"
+        self.model_path = "/home/ilya/Downloads/trained_model_finetune_7cl_25ep(1).pt"
+        self.encoder_path = "/home/ilya/Downloads/encoder_7(1).npy"
 
         self.model = self.load_model(self.model_path)
-        self.frame_memory = []
 
         self.encoder: LabelEncoder = LabelEncoder()
         self.encoder.classes_ = np.load(self.encoder_path)
+        self.debouncer = Debouncer()
 
-        self.debounce_length = debouncer_length
         self.num_receivers = num_receivers
 
         _, self.ax = plt.subplots(ncols=num_receivers)
@@ -46,19 +45,15 @@ class PredictionPipeline:
                     dfft_dbfs = algo.compute_doppler_map(mat, i_ant)
                     data_all_antennas.append(dfft_dbfs)
 
-                if len(self.frame_memory) + 1 == self.debounce_length:
-                    self.frame_memory.pop(0)
-
-
                 processed = do_postprocessing(data_all_antennas)
                 # processed = torch.unsqueeze(processed, 0)
 
-                self.frame_memory.append(processed)
+                self.debouncer.add_scan(processed)
+                probs = self.predict_probabilities(self.debouncer.get_scans())
+                label_index = self.debouncer.debounce(probs)
 
-                # labels = ['Pinch index', 'Palm tilt', 'Finger slider', 'Pinch pinky',
-                #           'Slow swipe', 'Fast swipe', 'Push', 'Pull', 'Finger rub', 'Circle', 'Palm hold', 'No action']
-                # print(labels[np.argmax(self.predict_probabilities(self.frame_memory))])
-                print(self.encoder.inverse_transform([np.argmax(self.predict_probabilities(self.frame_memory))])[0])
+                if label_index is not None:
+                    print(self.encoder.inverse_transform([label_index])[0])
                 self.visualize(processed)
 
     def load_model(self, path):
@@ -110,7 +105,6 @@ class FeatureExtractor(torch.nn.Module):
         self.dropout = torch.nn.Dropout(0.5)
 
     def forward(self, x):
-
         x = self.conv1(x)
         x = self.norm1(x)
         x = self.relu(x)
@@ -139,7 +133,7 @@ class FeatureExtractor(torch.nn.Module):
 
 
 class GestureNet(torch.nn.Module):
-    def __init__(self, num_input_channels = 4, num_cnn_features=256, num_rnn_hidden_size=256, num_classes=7) -> None:
+    def __init__(self, num_input_channels=4, num_cnn_features=256, num_rnn_hidden_size=256, num_classes=7) -> None:
         super().__init__()
 
         self.num_rnn_hidden_size = num_rnn_hidden_size
@@ -173,16 +167,17 @@ class GestureNet(torch.nn.Module):
         out = self.fc2(out)
         # out = torch.nn.Softmax(dim=1)(out)
 
-
         return out
 
-class FinetuneGestureNet(GestureNet):
-  def __init__(self, num_classes, weights_path="/content/drive/MyDrive/research_project_models/trained_model_25ep.pt"):
-    super().__init__(num_input_channels=3, num_classes=12)
 
-    self.load_state_dict(torch.load(weights_path).state_dict())
-    self.fc2 = torch.nn.Linear(self.num_rnn_hidden_size // 2, num_classes)
+class FinetuneGestureNet(GestureNet):
+    def __init__(self, num_classes,
+                 weights_path="/content/drive/MyDrive/research_project_models/trained_model_25ep.pt"):
+        super().__init__(num_input_channels=3, num_classes=12)
+
+        self.load_state_dict(torch.load(weights_path).state_dict())
+        self.fc2 = torch.nn.Linear(self.num_rnn_hidden_size // 2, num_classes)
+
 
 if __name__ == '__main__':
     PredictionPipeline().run()
-
