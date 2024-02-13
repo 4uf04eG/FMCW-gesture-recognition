@@ -1,31 +1,47 @@
+import threading
+import os.path
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
+from matplotlib.animation import FuncAnimation
+import numpy as np
+from sklearn.preprocessing import LabelEncoder
+import pandas as pd
+import torch
+import torch.nn.functional as F
 from AvianRDKWrapper.ifxRadarSDK import *
 from debouncer import Debouncer
 from dbf import DBF
-from common import do_preprocessing, do_postprocessing, configure_device
+from common import do_preprocessing, do_inference_processing, configure_device
 from range_doppler import DopplerAlgo, linear_to_dB
-from cfar import ca_cfar
-import torch
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.preprocessing import LabelEncoder
+from model import FeatureExtractor, GestureNet, FinetuneGestureNet
+# I undestood too late that recording whole model requires it to be under the same module
+# That's a quick but terrible fix
+FeatureExtractor = FeatureExtractor
+GestureNet = GestureNet
+FinetuneGestureNet = FinetuneGestureNet
+
 
 
 class PredictionPipeline:
-    def __init__(self, debouncer_length=7, num_receivers=3):
-        # self.model_path = "/home/ilya/Downloads/trained_model_25ep.pt"
-        self.model_path = "/home/ilya/Downloads/trained_model_finetune_7cl_25ep(1).pt"
-        self.encoder_path = "/home/ilya/Downloads/encoder_7(1).npy"
+    def __init__(self, num_receivers=3):
+        # self.model_path = "/home/ilya/Downloads/trained_model_finetune_7cl_25ep.pt"
+        # self.model_path = "/home/ilya/Downloads/trained_model_finetune_7cl_25ep(1).pt"
+        self.model_path = 'model/trained_model_finetune_7cl_25ep_custom_split.pt'
+        # self.model_path = '/home/ilya/RDK-TOOLS-SW/trained_model_finetune_6cl_25ep_custom_split_no_action-2.pt'
+        self.encoder_path = "model/encoder_7.npy"
+        # self.encoder_path = "/home/ilya/RDK-TOOLS-SW/encoder_6.npy"
 
         self.model = self.load_model(self.model_path)
 
         self.encoder: LabelEncoder = LabelEncoder()
         self.encoder.classes_ = np.load(self.encoder_path)
-        self.debouncer = Debouncer()
+        self.debouncer = Debouncer(memory_length=12)
 
         self.num_receivers = num_receivers
-
-        _, self.ax = plt.subplots(ncols=num_receivers)
-        self.plots = np.empty_like(self.ax)
+        self.visualizer = Visualizer(self.encoder, self.num_receivers)
+             
+    def start_gui(self):
+        self.visualizer.start_gui()   
 
     def run(self):
         with Device() as device:
@@ -33,7 +49,8 @@ class PredictionPipeline:
             configure_device(device, num_rx_antennas)
 
             algo = DopplerAlgo(device.get_config(), num_rx_antennas)
-            dbf = DBF(num_rx_antennas)
+            # In the end, we don't use angle info
+            # dbf = DBF(num_rx_antennas)
 
             while True:
                 frame_data = device.get_next_frame()
@@ -45,16 +62,21 @@ class PredictionPipeline:
                     dfft_dbfs = algo.compute_doppler_map(mat, i_ant)
                     data_all_antennas.append(dfft_dbfs)
 
-                processed = do_postprocessing(data_all_antennas)
-                # processed = torch.unsqueeze(processed, 0)
-
-                self.debouncer.add_scan(processed)
+                range_doppler = do_inference_processing(data_all_antennas)
+                
+                self.debouncer.add_scan(range_doppler)
                 probs = self.predict_probabilities(self.debouncer.get_scans())
+                     
+                probs = torch.squeeze(probs)
+                probs = F.softmax(probs, dim=-1)
+                probs = probs.numpy()
+                
+                self.visualizer.add_prediction_step(range_doppler, probs)
                 label_index = self.debouncer.debounce(probs)
 
                 if label_index is not None:
                     print(self.encoder.inverse_transform([label_index])[0])
-                self.visualize(processed)
+     
 
     def load_model(self, path):
         return torch.load(path, map_location=torch.device('cpu'))
@@ -69,115 +91,78 @@ class PredictionPipeline:
 
         return predictions
 
-    def visualize(self, data):
-        for index, channel in enumerate(data[0, :, :, :]):
-            if self.plots[index] is None:
-                self.plots[index] = self.ax[index].imshow(channel)
-            else:
-                self.plots[index].set_data(channel)
+   
+class Visualizer():
+    def __init__(self, encoder, num_receivers):
+        self.encoder = encoder
+        self.num_receivers = num_receivers
+        
+        self.last_range_doppler = None
+        fig, self.ax = plt.subplots(ncols=num_receivers)
+        self.plots = list(self.prepare_range_doppler_subplots())
+        self.anim = FuncAnimation(fig, self.visualize_data, interval=100)
+        
+        self.num_classes = len(self.encoder.classes_)
+        self.prob_history_length = 30
+        self.probs_history = pd.DataFrame(columns=np.arange(0, self.num_classes, 1))
+        self.fig2 = plt.figure(figsize=(18, 10))
+        self.plots2 = list(self.prepare_probs_subplots())
+        self.anim2 = FuncAnimation(self.fig2, self.visualize_probs, interval=100)
+        
+    def start_gui(self):
+        plt.show()
+        
+    def add_prediction_step(self, range_doppler, probs):
+        if len(self.probs_history) >= self.prob_history_length:
+            self.probs_history = self.probs_history.iloc[1:]
+            
+        self.last_range_doppler = range_doppler
+        self.probs_history = pd.concat([self.probs_history, 
+                                        pd.DataFrame.from_records([{index: value for index, value in enumerate(probs)}])], ignore_index=True)
+        
+    def prepare_range_doppler_subplots(self):
+        for index in range(self.num_receivers):
+            self.ax[index].set_xlabel('Velocity (pixels)')
+            self.ax[index].set_ylabel('Range (pixels)')
+            
+            yield self.ax[index].imshow(np.zeros((32, 32)))
+        
+    def prepare_probs_subplots(self, nrows=4, ncols=2):
+        gs = GridSpec(nrows=nrows, ncols=ncols, hspace=0.7)
+        # HARCODED, CHANGE when number of classes changes
+        # ['finger_circle' 'finger_rub' 'no-action' 'palm_hold' 'pull' 'push' 'swipe']
+        encoder_to_better_labels = [0, 3, 6, 1, 4, 5, 2]
+        # encoder_to_better_labels = [0, 3, 1, 4, 5, 2]
 
-        plt.draw()
-        plt.pause(1e-3)
+        for index in range(self.num_classes):
+                new_index = encoder_to_better_labels[index]
+                
+                i = new_index// ncols
+                j = new_index % ncols
 
+                ax = self.fig2.add_subplot(gs[i, j])
+                ax.set_title(self.encoder.inverse_transform([index])[0])
+                ax.set_xlim(0, self.prob_history_length)
+                ax.set_ylim(0, 1)
+                ax.set_xlabel('Number of frames')
+                ax.set_ylabel('Probablility')
+                
+                yield ax.plot([], [])[0]
+                
+    def visualize_data(self, _):
+        if self.last_range_doppler is None:
+            return
+        
+        for index, channel in enumerate(self.last_range_doppler[0, :, :, :]):
+            self.plots[index].set_data(channel)
+            self.plots[index].autoscale()
 
-class FeatureExtractor(torch.nn.Module):
-    def __init__(self, in_features, out_features) -> None:
-        super().__init__()
-        self.conv1 = torch.nn.Conv2d(in_features, 32, 3)
-        self.norm1 = torch.nn.BatchNorm2d(32)
-        self.pool1 = torch.nn.MaxPool2d(2)
-
-        self.conv2 = torch.nn.Conv2d(32, 64, 3)
-        self.norm2 = torch.nn.BatchNorm2d(64)
-        self.pool2 = torch.nn.MaxPool2d(2)
-
-        self.conv3 = torch.nn.Conv2d(64, 128, 3)
-        self.norm3 = torch.nn.BatchNorm2d(128)
-        self.pool3 = torch.nn.MaxPool2d(2)
-
-        self.conv4 = torch.nn.Conv2d(128, 256, 3)
-        self.norm4 = torch.nn.BatchNorm2d(256)
-        self.pool4 = torch.nn.MaxPool2d(2)
-
-        self.relu = torch.nn.ReLU()
-        self.flatten = torch.nn.Flatten()
-        self.fc = torch.nn.Linear(512, out_features)
-        self.dropout = torch.nn.Dropout(0.5)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.norm1(x)
-        x = self.relu(x)
-        x = self.pool1(x)
-
-        x = self.conv2(x)
-        x = self.norm2(x)
-        x = self.relu(x)
-        x = self.pool2(x)
-
-        x = self.conv3(x)
-        x = self.norm3(x)
-        x = self.relu(x)
-        x = self.pool3(x)
-
-        # x = self.conv4(x)
-        # x = self.norm4(x)
-        # x = self.relu(x)
-        # x = self.pool4(x)
-
-        x = self.flatten(x)
-        x = self.fc(x)
-        x = self.dropout(x)
-
-        return x
-
-
-class GestureNet(torch.nn.Module):
-    def __init__(self, num_input_channels=4, num_cnn_features=256, num_rnn_hidden_size=256, num_classes=7) -> None:
-        super().__init__()
-
-        self.num_rnn_hidden_size = num_rnn_hidden_size
-
-        self.frame_model = FeatureExtractor(num_input_channels, num_cnn_features)
-        # self.frame_model = vgg11()
-        # first_conv_layer = [torch.nn.Conv2d(4, 3, kernel_size=3, stride=1, padding=1, dilation=1, groups=1, bias=True)]
-        # first_conv_layer.extend(list(self.frame_model.features))
-
-        # self.frame_model.features = torch.nn.Sequential(*first_conv_layer)
-        # self.frame_model.classifier[6] = torch.nn.Linear(4096, num_cnn_features)
-
-        self.temporal_model = torch.nn.LSTM(input_size=num_cnn_features, hidden_size=num_rnn_hidden_size)
-
-        self.fc1 = torch.nn.Linear(num_rnn_hidden_size, num_rnn_hidden_size // 2)
-        self.relu = torch.nn.ReLU()
-        self.fc2 = torch.nn.Linear(num_rnn_hidden_size // 2, num_classes)
-
-    def forward(self, x):
-        hidden = None
-
-        for frame in x:
-            features = self.frame_model(frame)
-            features = torch.unsqueeze(features, 0)
-            out, hidden = self.temporal_model(features, hidden)
-
-        # out = torch.squeeze(out)
-        # print(out.shape)
-        out = self.fc1(out)
-        out = self.relu(out)
-        out = self.fc2(out)
-        # out = torch.nn.Softmax(dim=1)(out)
-
-        return out
-
-
-class FinetuneGestureNet(GestureNet):
-    def __init__(self, num_classes,
-                 weights_path="/content/drive/MyDrive/research_project_models/trained_model_25ep.pt"):
-        super().__init__(num_input_channels=3, num_classes=12)
-
-        self.load_state_dict(torch.load(weights_path).state_dict())
-        self.fc2 = torch.nn.Linear(self.num_rnn_hidden_size // 2, num_classes)
-
-
+    def visualize_probs(self, _):
+        for index, (_, column_data) in enumerate(self.probs_history.items()):
+            self.plots2[index].set_data(column_data.index, column_data)
+    
 if __name__ == '__main__':
-    PredictionPipeline().run()
+    obj = PredictionPipeline()
+    
+    threading.Thread(target=obj.run).start()
+    obj.start_gui()

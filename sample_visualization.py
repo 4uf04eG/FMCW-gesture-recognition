@@ -3,7 +3,7 @@ import numpy as np
 import glob
 import re
 
-from common import do_postprocessing, do_preprocessing
+from common import do_inference_processing, do_preprocessing
 
 
 class SampleVisualizer:
@@ -17,7 +17,7 @@ class SampleVisualizer:
     def run(self):
         folder_paths = glob.glob(self.samples_path + "/*")
 
-        allowed_types = ['push', 'pull']
+        allowed_types = ['pull']
         folder_paths = [path for path in folder_paths if any(t in path for t in allowed_types)]
 
         for folder_path in folder_paths:

@@ -2,7 +2,7 @@ import numpy as np
 import glob
 import re
 import os
-from common import do_preprocessing, do_postprocessing
+from common import do_preprocessing, do_inference_processing
 
 
 class Preprocessor:

@@ -1,10 +1,5 @@
-import numpy as np
-import torch.nn.functional as F
-import torch
-
-
 class Debouncer:
-    def __init__(self, detect_threshold=0.4, noise_threshold=0.3, memory_length=12, min_num_detections=3):
+    def __init__(self, detect_threshold=0.6, noise_threshold=0.3, memory_length=12, min_num_detections=3):
         # Based on https://dl.acm.org/doi/pdf/10.1145/3411764.3445367
 
         self.detect_threshold = detect_threshold
@@ -25,12 +20,7 @@ class Debouncer:
         return self.frame_memory
 
     def debounce(self, probs):
-        probs = torch.squeeze(probs)
-        probs = F.softmax(probs, dim=-1)
-        probs = probs.numpy()
-
         detected_actions = (probs > self.detect_threshold).nonzero()[0]
-        # main_action = np.argmax(probs)
 
         if len(detected_actions) != 1:
             if len(detected_actions) == 0:
@@ -44,8 +34,6 @@ class Debouncer:
             return None
 
         main_action = detected_actions[0]
-
-        print(self.detection_memory)
 
         if len(self.detection_memory) > 0 and len(self.detection_memory) + 1 >= self.min_num_detection:
             self.detection_memory.pop(0)

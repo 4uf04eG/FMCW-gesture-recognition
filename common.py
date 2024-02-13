@@ -45,30 +45,12 @@ def do_preprocessing(range_doppler):
 
     return range_doppler
 
-def do_postprocessing(range_doppler: np.array):
-    # range_doppler = normalize_complex_arr(range_doppler)
-    range_doppler = np.abs(range_doppler)
-    for index, channel in enumerate(range_doppler):
-        min = np.min(channel)
-        max = np.max(channel)
-        range_doppler[index] = (channel - min) / (max - min)
-    # min = np.min(range_doppler)
-    # max = np.max(range_doppler)
-    # normalized = (range_doppler - min) / (max - min)
-    # range_doppler = normalized
-
-    range_doppler = np.transpose(range_doppler, (2, 1, 0))
-    range_doppler = resize(range_doppler, dsize=(32, 32), interpolation=INTER_AREA)
-    range_doppler = np.transpose(range_doppler, (2, 1, 0))
+def do_inference_processing(range_doppler: np.array):
+    range_doppler = do_preprocessing(range_doppler)
 
     range_doppler = torch.from_numpy(range_doppler).float()
     range_doppler = torch.unsqueeze(range_doppler, 0)
-    #
-    #
-    # range_doppler = np.array(range_doppler)
-    # tensor = torch.from_numpy(range_doppler).float()
-    # tensor = torch.unsqueeze(tensor, 0)
-    # range_doppler = VideoTransform((32, 32))(tensor)
+
 
     return range_doppler
 
