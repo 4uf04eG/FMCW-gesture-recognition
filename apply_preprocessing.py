@@ -14,7 +14,7 @@ class Preprocessor:
         folder_paths = glob.glob(self.samples_path + "/*")
 
         for folder_path in folder_paths:
-            for video_path in glob.glob(folder_path + f"/*.npy"):
+            for video_path in glob.glob(folder_path + "/*.npy"):
                 data = np.load(video_path)
 
                 if len(data.shape) == 5:

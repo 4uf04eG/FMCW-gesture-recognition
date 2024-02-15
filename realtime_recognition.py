@@ -10,9 +10,9 @@ import torch
 import torch.nn.functional as F
 from AvianRDKWrapper.ifxRadarSDK import *
 from debouncer import Debouncer
-from dbf import DBF
+from algorithms.dbf import DBF
 from common import do_preprocessing, do_inference_processing, configure_device
-from range_doppler import DopplerAlgo, linear_to_dB
+from algorithms.range_doppler import DopplerAlgo
 from model import FeatureExtractor, GestureNet, FinetuneGestureNet
 # I undestood too late that recording whole model requires it to be under the same module
 # That's a quick but terrible fix
@@ -24,12 +24,8 @@ FinetuneGestureNet = FinetuneGestureNet
 
 class PredictionPipeline:
     def __init__(self, num_receivers=3):
-        # self.model_path = "/home/ilya/Downloads/trained_model_finetune_7cl_25ep.pt"
-        # self.model_path = "/home/ilya/Downloads/trained_model_finetune_7cl_25ep(1).pt"
         self.model_path = 'model/trained_model_finetune_7cl_25ep_custom_split.pt'
-        # self.model_path = '/home/ilya/RDK-TOOLS-SW/trained_model_finetune_6cl_25ep_custom_split_no_action-2.pt'
         self.encoder_path = "model/encoder_7.npy"
-        # self.encoder_path = "/home/ilya/RDK-TOOLS-SW/encoder_6.npy"
 
         self.model = self.load_model(self.model_path)
 
@@ -71,7 +67,7 @@ class PredictionPipeline:
                 probs = F.softmax(probs, dim=-1)
                 probs = probs.numpy()
                 
-                self.visualizer.add_prediction_step(range_doppler, probs)
+                self.visualizer.add_prediction_step(range_doppler.numpy(), probs)
                 label_index = self.debouncer.debounce(probs)
 
                 if label_index is not None:
@@ -98,9 +94,9 @@ class Visualizer():
         self.num_receivers = num_receivers
         
         self.last_range_doppler = None
-        fig, self.ax = plt.subplots(ncols=num_receivers)
+        self.fig = plt.figure(figsize=(18, 10))
         self.plots = list(self.prepare_range_doppler_subplots())
-        self.anim = FuncAnimation(fig, self.visualize_data, interval=100)
+        self.anim = FuncAnimation(self.fig, self.visualize_data, interval=100)
         
         self.num_classes = len(self.encoder.classes_)
         self.prob_history_length = 30
@@ -121,15 +117,21 @@ class Visualizer():
                                         pd.DataFrame.from_records([{index: value for index, value in enumerate(probs)}])], ignore_index=True)
         
     def prepare_range_doppler_subplots(self):
+        gs = GridSpec(nrows=1, ncols=self.num_receivers, hspace=0.7)
+        
         for index in range(self.num_receivers):
-            self.ax[index].set_xlabel('Velocity (pixels)')
-            self.ax[index].set_ylabel('Range (pixels)')
-            
-            yield self.ax[index].imshow(np.zeros((32, 32)))
+            ax = self.fig.add_subplot(gs[index])
+            ax.set_xlabel('Velocity (m/s)')
+            ax.set_ylabel('Range (m)')
+            ax.set_xticks([0, 8, 16, 24, 31])
+            ax.set_yticks([0, 8, 16, 24, 31])
+            ax.set_xticklabels([-3, -1.5, 0, 1.5, 3])
+            ax.set_yticklabels([0, 0.25, 0.5, 0.75, 1])
+            yield ax.imshow(np.zeros((32, 32)))
         
     def prepare_probs_subplots(self, nrows=4, ncols=2):
         gs = GridSpec(nrows=nrows, ncols=ncols, hspace=0.7)
-        # HARCODED, CHANGE when number of classes changes
+        # HADCODED, CHANGE when number of classes changes
         # ['finger_circle' 'finger_rub' 'no-action' 'palm_hold' 'pull' 'push' 'swipe']
         encoder_to_better_labels = [0, 3, 6, 1, 4, 5, 2]
         # encoder_to_better_labels = [0, 3, 1, 4, 5, 2]
@@ -145,7 +147,7 @@ class Visualizer():
                 ax.set_xlim(0, self.prob_history_length)
                 ax.set_ylim(0, 1)
                 ax.set_xlabel('Number of frames')
-                ax.set_ylabel('Probablility')
+                ax.set_ylabel('Probability')
                 
                 yield ax.plot([], [])[0]
                 
@@ -155,7 +157,7 @@ class Visualizer():
         
         for index, channel in enumerate(self.last_range_doppler[0, :, :, :]):
             self.plots[index].set_data(channel)
-            self.plots[index].autoscale()
+            self.plots[index].set_clim(channel.min(), channel.max())
 
     def visualize_probs(self, _):
         for index, (_, column_data) in enumerate(self.probs_history.items()):
