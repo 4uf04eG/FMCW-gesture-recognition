@@ -21,7 +21,6 @@ GestureNet = GestureNet
 FinetuneGestureNet = FinetuneGestureNet
 
 
-
 class PredictionPipeline:
     def __init__(self, num_receivers=3):
         self.model_path = 'model/trained_model_finetune_7cl_25ep_custom_split.pt'
