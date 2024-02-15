@@ -129,7 +129,3 @@ class DopplerAlgo:
         range_fft = 2 * range_fft[:, range(int(chirpsamples))]
 
         return range_fft
-
-
-def linear_to_dB(x):
-    return 20*np.log10(abs(x))

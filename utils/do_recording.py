@@ -1,12 +1,10 @@
 import numpy
-
 from AvianRDKWrapper.ifxRadarSDK import *
-from range_doppler import DopplerAlgo, linear_to_dB
+from algorithms.range_doppler import DopplerAlgo
 from common import do_preprocessing, configure_device
 import os
 import numpy as np
 import glob
-import re
 
 
 def main():

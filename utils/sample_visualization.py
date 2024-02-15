@@ -8,7 +8,6 @@ from common import do_inference_processing, do_preprocessing
 
 class SampleVisualizer:
     def __init__(self, num_receivers=3):
-        # self.model_path = "/home/ilya/Downloads/trained_model_25ep.pt"
         self.samples_path = "/home/ilya/RDK-TOOLS-SW/new_dataset/raw_dataset"
 
         _, self.ax = plt.subplots(ncols=num_receivers)
