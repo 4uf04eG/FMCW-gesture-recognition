@@ -1,0 +1,2 @@
+# Hand gesture recognition with FMCW
+Model pre-trained on [Deep soli dataset](https://github.com/simonwsw/deep-soli/tree/master) and fine-tuned on self-collected dataset recorded using BGT60TR13C 60 GHz FMCW radar. It consists of only 350 classes over 7 classes recorded by only one person (the dataself is not included). Therefore the model is not production-ready. The model itself is a combination of CNN for spacial features extraction and LSTM for temporal features extraction.
